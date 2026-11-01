@@ -45,3 +45,5 @@ More replicas spread the keys more evenly and cost more memory. About 100 per no
 mq-test -L vendor/ds.mq consistenthash_tests.mq
 mq-bench -L vendor/ds.mq -L . consistenthash_bench.mq
 ```
+
+Each `_small` / `_large` pair in `consistenthash_bench.mq` runs the same work at two sizes, and a ratio near the size ratio means the cost is linear. One of the goals of this module is also to check mq for performance problems.
