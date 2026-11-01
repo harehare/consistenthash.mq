@@ -1,0 +1,32 @@
+import "consistenthash"
+
+# Each pair runs the same work at two sizes: a ratio near the size ratio means the cost is linear.
+
+def build(n):
+  var r = consistenthash::new(50)
+  | var i = 0
+  | let _ = while (i < n):
+      r = consistenthash::add_node(r, "node-" + to_string(i))
+      | i = i + 1
+    end
+  | consistenthash::size(r)
+end
+
+def lookup(keys):
+  let r = fold(map(range(0, 19), fn(i): "node-" + to_string(i);), consistenthash::new(50), fn(acc, n): consistenthash::add_node(acc, n);)
+  | var i = 0
+  | var hits = 0
+  | let _ = while (i < keys):
+      hits = hits + if (is_none(consistenthash::node_for(r, "key-" + to_string(i)))): 0 else: 1
+      | i = i + 1
+    end
+  | hits
+end
+
+def bench_build_small(): build(10);
+
+def bench_build_large(): build(40);
+
+def bench_lookup_small(): lookup(500);
+
+def bench_lookup_large(): lookup(2000);

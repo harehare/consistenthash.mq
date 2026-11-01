@@ -1,0 +1,160 @@
+import "consistenthash"
+| include "test"
+
+def ring(names): fold(names, consistenthash::new(100), fn(r, n): consistenthash::add_node(r, n););
+
+# The owner of each of `n` keys.
+def owners(r, n): map(range(0, n - 1), fn(i): consistenthash::node_for(r, "key-" + to_string(i)););
+
+def count(items, who): len(filter(items, fn(x): x == who;));
+
+# =========================================================================
+# basics
+# =========================================================================
+
+def test_new_ring_is_empty():
+  let r = consistenthash::new()
+  | assert_true(consistenthash::is_empty(r))
+  | assert_eq(consistenthash::size(r), 0)
+  | assert_eq(consistenthash::members(r), [])
+  | assert_none(consistenthash::node_for(r, "x"))
+  | assert_eq(consistenthash::nodes_for(r, "x", 3), [])
+end
+
+def test_new_rejects_fewer_than_one_replica():
+  assert_eq(try: consistenthash::new(0) catch: "failed", "failed")
+end
+
+def test_single_node_owns_every_key():
+  let r = ring(["only"])
+  | assert_eq(count(owners(r, 200), "only"), 200)
+end
+
+def test_add_node_places_replicas_points():
+  let r = consistenthash::add_node(consistenthash::new(25), "a")
+  | assert_eq(len(r["points"]), 25)
+  | assert_eq(consistenthash::members(r), ["a"])
+  | assert_true(consistenthash::has_node(r, "a"))
+  | assert_eq(consistenthash::has_node(r, "b"), false)
+end
+
+def test_points_stay_sorted():
+  let r = ring(["a", "b", "c"])
+  | assert_eq(r["points"], sort(r["points"]))
+  | assert_eq(len(r["points"]), 300)
+end
+
+def test_adding_a_node_twice_changes_nothing():
+  let r = ring(["a", "b"])
+  | assert_eq(consistenthash::add_node(r, "a"), r)
+end
+
+def test_removing_an_unknown_node_changes_nothing():
+  let r = ring(["a", "b"])
+  | assert_eq(consistenthash::remove_node(r, "z"), r)
+end
+
+def test_removing_every_node_gives_an_empty_ring():
+  let r = consistenthash::remove_node(consistenthash::remove_node(ring(["a", "b"]), "a"), "b")
+  | assert_true(consistenthash::is_empty(r))
+  | assert_eq(r["points"], [])
+  | assert_eq(r["owners"], {})
+  | assert_none(consistenthash::node_for(r, "x"))
+end
+
+def test_removing_a_node_restores_the_ring_without_it():
+  assert_eq(consistenthash::remove_node(ring(["a", "b", "c"]), "c"), ring(["a", "b"]))
+end
+
+def test_a_key_always_maps_to_the_same_node():
+  let r = ring(["a", "b", "c"])
+  | assert_eq(consistenthash::node_for(r, "user:1"), consistenthash::node_for(r, "user:1"))
+  | assert_eq(consistenthash::node_for(r, 42), consistenthash::node_for(r, "42"))
+end
+
+def test_the_mapping_is_pinned():
+  let r = fold(["a", "b", "c"], consistenthash::new(50), fn(acc, n): consistenthash::add_node(acc, n);)
+  | assert_eq(consistenthash::node_for(r, "user:1"), "a")
+  | assert_eq(consistenthash::nodes_for(r, "user:1", 2), ["a", "c"])
+  | assert_eq(consistenthash::node_for(consistenthash::remove_node(r, "a"), "user:1"), "c")
+end
+
+def test_keys_past_the_last_point_wrap_to_the_first():
+  let r = fold(["a", "b", "c"], consistenthash::new(1), fn(acc, n): consistenthash::add_node(acc, n);)
+  | let last = r["points"][len(r["points"]) - 1]
+  | let first_owner = r["owners"][to_string(r["points"][0])]
+  | let past = filter(range(0, 499), fn(i): hash("key-" + to_string(i)) > last;)
+  | let wrong = filter(past, fn(i): consistenthash::node_for(r, "key-" + to_string(i)) != first_owner;)
+  | assert_true(len(past) > 5)
+  | assert_true(r["owners"][to_string(r["points"][0])] != r["owners"][to_string(r["points"][1])])
+  | assert_eq(wrong, [])
+end
+
+def test_a_key_hashing_exactly_to_a_point_belongs_to_that_point():
+  let r = ring(["a", "b", "c"])
+  | let wrong = filter(range(0, 99), fn(i): consistenthash::node_for(r, "b#" + to_string(i)) != "b";)
+  | assert_eq(wrong, [])
+end
+
+# =========================================================================
+# distribution and movement
+# =========================================================================
+
+def test_keys_spread_over_the_nodes():
+  let o = owners(ring(["a", "b", "c", "d"]), 2000)
+  | let low = filter(["a", "b", "c", "d"], fn(n): count(o, n) < 350 || count(o, n) > 650;)
+  | assert_eq(low, [])
+end
+
+def test_adding_a_node_moves_keys_only_to_the_new_node():
+  let before = owners(ring(["a", "b", "c", "d"]), 2000)
+  | let after = owners(consistenthash::add_node(ring(["a", "b", "c", "d"]), "e"), 2000)
+  | let moved = filter(range(0, 1999), fn(i): before[i] != after[i];)
+  | let elsewhere = filter(moved, fn(i): after[i] != "e";)
+  | assert_eq(elsewhere, [])
+  | assert_true(len(moved) > 200 && len(moved) < 600)
+  | assert_eq(len(moved), count(after, "e"))
+end
+
+def test_removing_a_node_moves_only_its_keys():
+  let r = ring(["a", "b", "c", "d"])
+  | let before = owners(r, 2000)
+  | let after = owners(consistenthash::remove_node(r, "d"), 2000)
+  | let disturbed = filter(range(0, 1999), fn(i): before[i] != "d" && before[i] != after[i];)
+  | assert_eq(disturbed, [])
+  | assert_eq(count(after, "d"), 0)
+end
+
+def test_a_node_added_back_takes_its_keys_back():
+  let r = ring(["a", "b", "c"])
+  | let again = consistenthash::add_node(consistenthash::remove_node(r, "b"), "b")
+  | assert_eq(owners(again, 500), owners(r, 500))
+end
+
+def test_more_replicas_even_out_the_load():
+  let spread = fn(replicas):
+    let r = fold(["a", "b", "c", "d"], consistenthash::new(replicas), fn(acc, n): consistenthash::add_node(acc, n);)
+    | let o = owners(r, 2000)
+    | max(max(count(o, "a"), count(o, "b")), max(count(o, "c"), count(o, "d"))) - min(min(count(o, "a"), count(o, "b")), min(count(o, "c"), count(o, "d")));
+  | assert_true(spread(200) < spread(2))
+end
+
+# =========================================================================
+# nodes_for
+# =========================================================================
+
+def test_nodes_for_starts_with_the_owner_and_has_no_repeats():
+  let r = ring(["a", "b", "c", "d"])
+  | let bad = filter(range(0, 99), fn(i):
+      let found = consistenthash::nodes_for(r, "key-" + to_string(i), 3)
+      | found[0] != consistenthash::node_for(r, "key-" + to_string(i)) || len(found) != 3 || len(uniq(found)) != 3;
+    )
+  | assert_eq(bad, [])
+end
+
+def test_nodes_for_is_capped_by_the_number_of_nodes():
+  let r = ring(["a", "b"])
+  | assert_eq(len(consistenthash::nodes_for(r, "k", 5)), 2)
+  | assert_eq(consistenthash::nodes_for(r, "k", 0), [])
+  | assert_eq(len(consistenthash::nodes_for(r, "k", 1)), 1)
+end

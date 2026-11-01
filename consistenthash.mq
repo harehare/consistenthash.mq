@@ -1,0 +1,108 @@
+import "ds"
+
+# A consistent hash ring: it maps keys to nodes so that adding or removing a node moves only the
+# keys next to it. Each node owns `replicas` points on the ring, and a key belongs to the node
+# owning the first point at or after the key's hash, wrapping around at the end.
+#
+# The ring is a dict: {"replicas", "nodes", "points", "owners"}, where `points` is a sorted list of
+# numbers and `owners` maps each point, written as a string, to its node.
+
+def _point_key(point): to_string(point);
+
+# Returns the node owning the point at position `i` of the ring.
+def _owner_at(ring, i): ring["owners"][_point_key(ring["points"][i])];
+
+# Returns the position of the first point at or after the key's hash, wrapping to 0.
+def _start(ring, key):
+  let i = ds::sorted::lower_bound(ring["points"], hash(to_string(key)))
+  | if (i == len(ring["points"])): 0 else: i;
+
+# Returns an empty ring in which each node will own `replicas` points.
+def new(replicas = 100):
+  let _ = if (replicas < 1): error("consistenthash: replicas must be at least 1") else: None
+  | {"replicas": replicas, "nodes": [], "points": [], "owners": {}};
+
+# Returns the nodes in the order they were added.
+def members(ring): ring["nodes"];
+
+# Returns the number of nodes.
+def size(ring): len(ring["nodes"]);
+
+# Returns true if the ring has no nodes.
+def is_empty(ring): len(ring["nodes"]) == 0;
+
+# Returns true if `node` is on the ring.
+def has_node(ring, node): contains(ring["nodes"], node);
+
+# Adds a node. Adding a node that is already there changes nothing.
+def add_node(ring, node):
+  if (has_node(ring, node)):
+    ring
+  else:
+    do
+      var owners = ring["owners"]
+      | var fresh = []
+      | var i = 0
+      | let _ = while (i < ring["replicas"]):
+          let point = hash(node + "#" + to_string(i))
+          | let key = _point_key(point)
+          | let _ = if (!has(owners, key)):
+              do
+                owners[key] = node
+                | fresh += [point]
+              end
+            else:
+              None
+          | i = i + 1
+        end
+      | {
+          "replicas": ring["replicas"],
+          "nodes": ring["nodes"] + [node],
+          "points": ds::sorted::from(ring["points"] + fresh),
+          "owners": owners
+        }
+    end
+end
+
+# Removes a node. Removing a node that is not there changes nothing.
+def remove_node(ring, node):
+  let owners = ring["owners"]
+  | let kept = filter(ring["points"], fn(p): owners[_point_key(p)] != node;)
+  | let gone = filter(ring["points"], fn(p): owners[_point_key(p)] == node;)
+  | var left = owners
+  | var i = 0
+  | let _ = while (i < len(gone)):
+      left = del(left, _point_key(gone[i]))
+      | i = i + 1
+    end
+  | {
+      "replicas": ring["replicas"],
+      "nodes": filter(ring["nodes"], fn(n): n != node;),
+      "points": kept,
+      "owners": left
+    }
+end
+
+# Returns the node that owns `key`, or None if the ring is empty.
+def node_for(ring, key): if (is_empty(ring)): None else: _owner_at(ring, _start(ring, key));
+
+# Returns up to `count` distinct nodes for `key`, the owner first, then the nodes that follow it
+# around the ring. Use it to place replicas of a key.
+def nodes_for(ring, key, count):
+  if (is_empty(ring) || count < 1):
+    []
+  else:
+    do
+      let total = len(ring["points"])
+      | let wanted = min(count, len(ring["nodes"]))
+      | let start = _start(ring, key)
+      | var found = []
+      | var step = 0
+      | let _ = while (len(found) < wanted && step < total):
+          let owner = _owner_at(ring, (start + step) % total)
+          | let _ = if (!contains(found, owner)): found += [owner] else: None
+          | step = step + 1
+        end
+      | found
+    end
+end
