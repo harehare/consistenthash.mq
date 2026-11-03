@@ -40,10 +40,12 @@ def add_node(ring, node):
     ring
   else:
     do
-      var owners = ring["owners"]
+      var out = ring
+      | var owners = out["owners"]
+      | out["owners"] = None
       | var fresh = []
       | var i = 0
-      | let _ = while (i < ring["replicas"]):
+      | let _ = while (i < out["replicas"]):
           let point = hash(node + "#" + to_string(i))
           | let key = _point_key(point)
           | let _ = if (!has(owners, key)):
@@ -55,12 +57,10 @@ def add_node(ring, node):
               None
           | i = i + 1
         end
-      | {
-          "replicas": ring["replicas"],
-          "nodes": ring["nodes"] + [node],
-          "points": ds::sorted::from(ring["points"] + fresh),
-          "owners": owners
-        }
+      | out["owners"] = owners
+      | out["nodes"] = out["nodes"] + [node]
+      | out["points"] = ds::sorted::from(out["points"] + fresh)
+      | out
     end
 end
 
