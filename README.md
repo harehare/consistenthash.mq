@@ -4,7 +4,7 @@
 > This project is currently under active development. APIs and features may change without notice.
 
 > [!NOTE]
-> This module needs the development version of mq, which is not released yet: it uses the `hash` builtin.
+> This module needs mq v0.10.1 or later: it uses the `hash` builtin.
 
 A consistent hash ring for [mq](https://github.com/harehare/mq), as a module: it maps keys to nodes so that adding or removing a node moves only the keys next to it. Use it to shard keys over servers, caches or output files without reshuffling everything when the set changes. With a plain `hash(key) % n`, changing `n` moves almost every key.
 
